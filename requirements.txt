@@ -10,3 +10,4 @@ playwright
 gunicorn
 markdownify
 beautifulsoup4
+uvicorn
