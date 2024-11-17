@@ -94,15 +94,33 @@ async def take_screenshot(payload: ScreenshotPayload):
     await playwright_manager.take_screenshot(url)
     return {"message": f"Taking screenshot of {url}"}
 
-@app.post("/scrape")
-async def scrape(request: Request):
-    """Scrape a webpage and convert it to Markdown."""
-    data = await request.json()
-    url = data.get("url")
-    include_images = data.get("include_images", False)
-    include_links = data.get("include_links", True)
-    include_headers = data.get("include_headers", True)
-    include_footers = data.get("include_footers", True)
+class ScrapeRequest(BaseModel):
+    url: str
+    include_images: bool = False
+    include_links: bool = True 
+    include_headers: bool = True
+    include_footers: bool = True
+
+@app.post("/scrape", response_class=PlainTextResponse)
+async def scrape(request: ScrapeRequest):
+    """
+    Scrape a webpage and convert it to Markdown.
+    
+    Args:
+        request (ScrapeRequest): The scraping configuration containing:
+            - url (str): The URL to scrape
+            - include_images (bool): Whether to include images in output (default: False)
+            - include_links (bool): Whether to include links in output (default: True)
+            - include_headers (bool): Whether to include headers in output (default: True) 
+            - include_footers (bool): Whether to include footers in output (default: True)
+    
+    Returns:
+        PlainTextResponse: The scraped content converted to Markdown
+        
+    Raises:
+        HTTPException: If URL is invalid or missing
+    """
+    url = request.url
     if not url:
         raise HTTPException(status_code=400, detail="No URL provided.")
 
@@ -111,11 +129,19 @@ async def scrape(request: Request):
         url = f"https://{url}" if url.startswith("www.") else None
     if not url:
         raise HTTPException(status_code=400, detail="Invalid URL.")
+        
     page = await playwright_manager.global_context.new_page()
     await page.route("**", block_unnecessary_resources)
     await page.goto(url, timeout=60000)
     html = await page.content()
-    markdown_content = convert_html_to_markdown(html, base_url=url,include_images=include_images,include_links=include_links,include_headers=include_headers,include_footers=include_footers)
+    markdown_content = convert_html_to_markdown(
+        html, 
+        base_url=url,
+        include_images=request.include_images,
+        include_links=request.include_links,
+        include_headers=request.include_headers,
+        include_footers=request.include_footers
+    )
     await page.close()
     return PlainTextResponse(content=markdown_content)
 
