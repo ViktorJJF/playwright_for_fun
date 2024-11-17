@@ -115,7 +115,7 @@ async def scrape(request: Request):
     await page.route("**", block_unnecessary_resources)
     await page.goto(url, timeout=60000)
     html = await page.content()
-    markdown_content = convert_html_to_markdown(html, base_url=url,allow_images=include_images,allow_links=include_links,allow_headers=include_headers,allow_footers=include_footers)
+    markdown_content = convert_html_to_markdown(html, base_url=url,include_images=include_images,include_links=include_links,include_headers=include_headers,include_footers=include_footers)
     await page.close()
     return PlainTextResponse(content=markdown_content)
 
