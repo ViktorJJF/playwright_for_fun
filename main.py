@@ -44,8 +44,8 @@ class PlaywrightManager:
         )
         await self.new_context()
         # blank page to keep browser
-        blank_page=await self.global_context.new_page()
-        blank_page.goto("about:blank")
+        blank_page = await self.global_context.new_page()
+        await blank_page.goto("about:blank")
 
     async def stop(self):
         """Stop Playwright and close the browser."""
@@ -76,7 +76,6 @@ app = FastAPI()
 @app.on_event("startup")
 async def startup_event():
     """Initialize resources on application startup."""
-    print("jajaj")
     global playwright_manager
     playwright_manager = PlaywrightManager()
     await playwright_manager.start()
@@ -87,11 +86,7 @@ class ScreenshotPayload(BaseModel):
     
 @app.get("/")
 async def read_root():
-    return {"message": "Welcome to the Basic API"}
-
-@app.get("/items/{item_id}")
-def read_item(item_id: int, q: str = None):
-    return {"item_id": item_id, "q": q}
+    return {"message": "Welcome to the Basic Webscrapper for prepare RAG LLM"}
 
 @app.post("/screenshot")
 async def take_screenshot(payload: ScreenshotPayload):
@@ -104,6 +99,10 @@ async def scrape(request: Request):
     """Scrape a webpage and convert it to Markdown."""
     data = await request.json()
     url = data.get("url")
+    include_images = data.get("include_images", False)
+    include_links = data.get("include_links", True)
+    include_headers = data.get("include_headers", False)
+    include_footers = data.get("include_footers", False)
     if not url:
         raise HTTPException(status_code=400, detail="No URL provided.")
 
@@ -116,9 +115,9 @@ async def scrape(request: Request):
     await page.route("**", block_unnecessary_resources)
     await page.goto(url, timeout=60000)
     html = await page.content()
-    markdown_content=convert_html_to_markdown(html,base_url=url)
+    markdown_content = convert_html_to_markdown(html, base_url=url,allow_images=include_images,allow_links=include_links,allow_headers=include_headers,allow_footers=include_footers)
     await page.close()
     return PlainTextResponse(content=markdown_content)
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=3500)
+    uvicorn.run(app, host="0.0.0.0", port=5000)
