@@ -72,29 +72,31 @@ def convert_html_to_markdown(
     for tag in soup(["script", "style", "meta", "link", "noscript", "iframe", "title"]):
         tag.decompose()
         
-    # Process labels: Combine with the next sibling if available
     for label in soup.find_all("label"):
+        if label.parent is None:
+            # Skip labels that are no longer part of the tree
+            continue
+
         label_text = clean_text(label.get_text(strip=True))
-        next_sibling = (
-            label.find_next_sibling()
-        )  # Find the next sibling at the same level
-        if next_sibling and not (
-            next_sibling.get("src") 
-            or next_sibling.get("href")
-            or next_sibling.name == "table"
-        ):
-            sibling_text = clean_text(next_sibling.get_text(strip=True))
-            combined_text = (
-                f"{label_text} {sibling_text}".strip()
-            )  # Combine label and sibling with a single space
-            label.replace_with(
-                combined_text
-            )  # Replace the label with the combined text
-            next_sibling.decompose()  # Remove the sibling as it's already include_d
+        next_sibling = label.find_next_sibling()  # Find the next sibling at the same level
+
+        if next_sibling:
+            # Check if sibling is valid and still part of the tree
+            if (
+                next_sibling.parent is not None
+                and not (next_sibling.get("src") or next_sibling.get("href"))
+                and next_sibling.name != "table"
+            ):
+                sibling_text = clean_text(next_sibling.get_text(strip=True))
+                combined_text = f"{label_text} {sibling_text}".strip()  # Combine texts
+                label.replace_with(combined_text)  # Replace label with combined text
+                next_sibling.decompose()  # Remove the sibling
+            else:
+                # If sibling exists but isn't valid, replace only the label text
+                label.replace_with(label_text)
         else:
-            label.replace_with(
-                label_text
-            )  # If no sibling, just replace with the label's text
+            # If no sibling exists, replace with just the label text
+            label.replace_with(label_text)
 
 
     # Process headings
@@ -168,6 +170,8 @@ def convert_html_to_markdown(
                     if href.startswith("/") or not urlparse(href).netloc:
                         href = urljoin(base_url, href)
                 tag.replace_with(f"[{combined_content}]({href})")
+            else:
+                tag.decompose()
         elif tag.parent.name != "a":  # Only process images not inside links
             src = tag.get("src", "")
             alt = tag.get("alt", "")

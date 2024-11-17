@@ -133,6 +133,7 @@ async def scrape(request: ScrapeRequest):
     page = await playwright_manager.global_context.new_page()
     await page.route("**", block_unnecessary_resources)
     await page.goto(url, timeout=60000)
+    await page.wait_for_load_state("networkidle")
     html = await page.content()
     markdown_content = convert_html_to_markdown(
         html, 
