@@ -71,14 +71,18 @@ def convert_html_to_markdown(
     # Remove unwanted elements
     for tag in soup(["script", "style", "meta", "link", "noscript", "iframe", "title"]):
         tag.decompose()
-
+        
     # Process labels: Combine with the next sibling if available
     for label in soup.find_all("label"):
         label_text = clean_text(label.get_text(strip=True))
         next_sibling = (
             label.find_next_sibling()
         )  # Find the next sibling at the same level
-        if next_sibling:
+        if next_sibling and not (
+            next_sibling.get("src") 
+            or next_sibling.get("href")
+            or next_sibling.name == "table"
+        ):
             sibling_text = clean_text(next_sibling.get_text(strip=True))
             combined_text = (
                 f"{label_text} {sibling_text}".strip()
@@ -91,6 +95,7 @@ def convert_html_to_markdown(
             label.replace_with(
                 label_text
             )  # If no sibling, just replace with the label's text
+
 
     # Process headings
     for tag in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
