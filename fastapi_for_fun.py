@@ -31,16 +31,7 @@ class PlaywrightManager:
         self.playwright = await async_playwright().start()
         self.browser = await self.playwright.chromium.launch(
             headless=True,
-            args=[
-                "--headless=new",  # Switch to new headless mode
-                "--disable-extensions",
-                "--disable-gpu", 
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-background-networking",
-                "--disable-renderer-backgrounding",
-                "--disable-hang-monitor",
-            ]
+            executable_path="C:\Program Files\Google\Chrome\Application\chrome.exe"
         )
         await self.new_context()
         # blank page to keep browser
