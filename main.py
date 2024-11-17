@@ -101,8 +101,8 @@ async def scrape(request: Request):
     url = data.get("url")
     include_images = data.get("include_images", False)
     include_links = data.get("include_links", True)
-    include_headers = data.get("include_headers", False)
-    include_footers = data.get("include_footers", False)
+    include_headers = data.get("include_headers", True)
+    include_footers = data.get("include_footers", True)
     if not url:
         raise HTTPException(status_code=400, detail="No URL provided.")
 
