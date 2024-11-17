@@ -1,0 +1,12 @@
+# Dev environment
+pip
+autopep8
+pytest
+pytest-flask
+
+# App
+flask
+playwright
+gunicorn
+markdownify
+beautifulsoup4
