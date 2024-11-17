@@ -5,9 +5,9 @@ pytest
 pytest-flask
 
 # App
-flask
 playwright
 gunicorn
 markdownify
 beautifulsoup4
 uvicorn
+fastapi
