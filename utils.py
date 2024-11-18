@@ -7,6 +7,15 @@ def clean_text(text):
     """Clean and normalize text content."""
     return " ".join(text.strip().split())
 
+def is_descendant_of_a(tag):
+    """Check if the tag is a descendant of an <a> tag."""
+    parent = tag.parent
+    while parent is not None:
+        if parent.name == 'a':
+            return True
+        parent = parent.parent
+    return False
+
 
 def extract_title(soup):
     """Extract page title."""
@@ -72,6 +81,69 @@ def convert_html_to_markdown(
     for tag in soup(["script", "style", "meta", "link", "noscript", "iframe", "title"]):
         tag.decompose()
         
+    # Process links
+    link_data = []
+
+    for tag in soup.find_all("a"):
+        # Skip already processed tags
+        if tag.get("data-processed") == "true":
+            continue
+
+        # Skip if the tag is a descendant of another <a> tag
+        if is_descendant_of_a(tag):
+            continue
+
+
+        # Extract the `href` attribute and validate
+        href = tag.get("href", "").strip()
+        if not href:
+            tag.decompose()
+            continue
+
+        # Clean and extract link text
+        link_text = clean_text(tag.get_text(strip=True))
+        sibling_content = []
+
+        # Collect sibling content
+        current = tag.next_sibling
+        while current:
+            if getattr(current, "name", None) in ["span", "div"]:
+                if current.get("data-processed") == "true":
+                    break  # Sibling already processed
+
+                sibling_text = clean_text(current.get_text(strip=True))
+                if sibling_text:
+                    sibling_content.append(sibling_text)
+
+                current["data-processed"] = "true"  # Mark sibling as processed
+            elif isinstance(current, str):
+                text = clean_text(current)
+                if text:
+                    sibling_content.append(text)
+            else:
+                break
+            current = current.next_sibling
+
+        # Combine link text and sibling content
+        if sibling_content:
+            full_text = f"{link_text} | {' | '.join(filter(None, sibling_content))}"
+        else:
+            full_text = link_text
+
+        # Resolve relative URLs to absolute if base_url is provided
+        if base_url and href.startswith(("/", "#")):
+            href = urljoin(base_url, href)
+
+        link_data.append((tag, full_text, href))
+
+        # Mark the tag as processed to prevent duplicate handling
+        tag["data-processed"] = "true"
+    # Step 2: Replace <a> tags with Markdown syntax
+    for tag, full_text, href in link_data:
+        if not full_text:
+            full_text = "Link"
+        tag.replace_with(f"[{full_text}]({href})")
+        
     for label in soup.find_all("label"):
         if label.parent is None:
             # Skip labels that are no longer part of the tree
@@ -133,53 +205,25 @@ def convert_html_to_markdown(
         for tag in soup.find_all(["footer"]):
             tag.decompose()
 
-    # Process links and images
-    for tag in soup.find_all(["a", "img"]):
-        if tag.name == "a":
-            href = tag.get("href", "")
-            img = tag.find("img")
-            children = list(tag.children)
-            content_parts = []
+    # Process standalone images
+    for img_tag in soup.find_all("img"):
+        src = img_tag.get("src", "").strip()
+        alt = clean_text(img_tag.get("alt", "").strip())
+        if not src or src.startswith(("blob:", "data:")):
+            img_tag.decompose()  # Skip invalid or inline images
+            continue
 
-            # Process all children of the link
-            for child in children:
-                if child.name == "img":  # Inline image in the link
-                    src = child.get("src", "")
-                    alt = child.get("alt", "")
-                    if src and not src.startswith(("blob:", "data:")):
-                        image_count += 1
-                        if base_url and not urlparse(src).netloc:
-                            src = urljoin(base_url, src)
-                        content_parts.append(
-                            f'![Image {image_count}{": " + alt if alt else ""}]({src})'
-                        )
-                elif child.string and child.string.strip():  # Inline text in the link
-                    content_parts.append(clean_text(child.string))
+        # Resolve relative URLs if base_url is provided
+        if base_url and not urlparse(src).netloc:
+            src = urljoin(base_url, src)
 
-            combined_content = " ".join(content_parts)
-            if href and combined_content:
-                if base_url:
-                    # Ensure base_url starts with https:// and ends with /
-                    if not base_url.startswith("https://") and not base_url.startswith(
-                        "http://"
-                    ):
-                        base_url = "https://" + base_url
-                    if base_url.endswith("/"):
-                        base_url = base_url[:-1]
+        # Fallback for alt text
+        if not alt:
+            alt = f"Image {image_count + 1}"
+        image_count += 1
 
-                    if href.startswith("/") or not urlparse(href).netloc:
-                        href = urljoin(base_url, href)
-                tag.replace_with(f"[{combined_content}]({href})")
-            else:
-                tag.decompose()
-        elif tag.parent.name != "a":  # Only process images not inside links
-            src = tag.get("src", "")
-            alt = tag.get("alt", "")
-            if src and not src.startswith(("blob:", "data:")):
-                image_count += 1
-                if base_url and not urlparse(src).netloc:
-                    src = urljoin(base_url, src)
-                tag.replace_with(f"![Image {image_count}: {alt}]({src})")
+        # Replace the <img> tag with Markdown image syntax
+        img_tag.replace_with(f"![{alt}]({src})")
 
     # Process lists
     for tag in soup.find_all(["ul", "ol"]):
@@ -325,3 +369,4 @@ def convert_html_to_markdown(
     markdown = re.sub(r" +", " ", markdown)  # Normalize spaces
 
     return markdown.strip()
+
