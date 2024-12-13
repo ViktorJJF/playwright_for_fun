@@ -78,7 +78,7 @@ def convert_html_to_markdown(
         header.append(f'{title}\n{"=" * len(title)}\n')
 
     # Remove unwanted elements
-    for tag in soup(["script", "style", "meta", "link", "noscript", "iframe", "title"]):
+    for tag in soup(["script", "style", "meta", "link", "noscript", "iframe", "title", "br"]):
         tag.decompose()
         
     # Process links

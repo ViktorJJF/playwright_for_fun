@@ -1,13 +1,20 @@
-from playwright.async_api import async_playwright
-from fastapi import FastAPI,Request,HTTPException
+from playwright.async_api import async_playwright, TimeoutError
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import PlainTextResponse
 import uvicorn
 import asyncio
-from pydantic import BaseModel, HttpUrl
-from urllib.parse import urljoin, urlparse
+from pydantic import BaseModel
+from urllib.parse import urlparse
 from utils import convert_html_to_markdown
+import logging
 
-playwright_manager=None
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,  # Set the log level to INFO
+    format="%(asctime)s - %(levelname)s - %(message)s",  # Format for log messages
+)
+
+playwright_manager = None
 
 # Resource blocking settings
 RESOURCE_BLOCK_LIST = {"media", "font", "image"}
@@ -27,14 +34,14 @@ class PlaywrightManager:
 
     async def start(self):
         """Start Playwright and launch the browser."""
-        print("Starting browser...")
+        print("Starting browser pepe 2...")
         self.playwright = await async_playwright().start()
         self.browser = await self.playwright.chromium.launch(
             headless=True,
             args=[
-                "--headless=new",  # Switch to new headless mode
+                "--headless=new",
                 "--disable-extensions",
-                "--disable-gpu", 
+                "--disable-gpu",
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
                 "--disable-background-networking",
@@ -43,7 +50,7 @@ class PlaywrightManager:
             ]
         )
         await self.new_context()
-        # blank page to keep browser
+        # Blank page to keep browser open
         blank_page = await self.global_context.new_page()
         await blank_page.goto("about:blank")
 
@@ -60,16 +67,19 @@ class PlaywrightManager:
             raise RuntimeError("Browser not started")
         self.global_context = await self.browser.new_context()
         return self.global_context
-    
+
     async def take_screenshot(self, url: str):
         """Take a screenshot of a page."""
         if not self.global_context:
             raise RuntimeError("Context not created")
-        print("El global context es: ", self.global_context)
         page = await self.global_context.new_page()
-        await page.goto(url)
-        await page.screenshot(path=f"{url.replace('https://', '')}.png")
-        await page.close()
+        try:
+            await page.goto(url, timeout=10000)  # 10 seconds timeout
+            await page.screenshot(path=f"{url.replace('https://', '')}.png")
+        except TimeoutError:
+            raise HTTPException(status_code=408, detail="Page load timed out")
+        finally:
+            await page.close()
 
 app = FastAPI()
 
@@ -79,25 +89,24 @@ async def startup_event():
     global playwright_manager
     playwright_manager = PlaywrightManager()
     await playwright_manager.start()
-    
 
 class ScreenshotPayload(BaseModel):
     url: str
-    
+
 @app.get("/")
 async def read_root():
     return {"message": "Welcome to the Basic Webscrapper for prepare RAG LLM"}
 
 @app.post("/screenshot")
 async def take_screenshot(payload: ScreenshotPayload):
-    url=payload.url
+    url = payload.url
     await playwright_manager.take_screenshot(url)
     return {"message": f"Taking screenshot of {url}"}
 
 class ScrapeRequest(BaseModel):
     url: str
     include_images: bool = False
-    include_links: bool = True 
+    include_links: bool = True
     include_headers: bool = True
     include_footers: bool = True
 
@@ -105,7 +114,7 @@ class ScrapeRequest(BaseModel):
 async def scrape(request: ScrapeRequest):
     """
     Scrape a webpage and convert it to Markdown.
-    
+
     Args:
         request (ScrapeRequest): The scraping configuration containing:
             - url (str): The URL to scrape
@@ -113,13 +122,15 @@ async def scrape(request: ScrapeRequest):
             - include_links (bool): Whether to include links in output (default: True)
             - include_headers (bool): Whether to include headers in output (default: True) 
             - include_footers (bool): Whether to include footers in output (default: True)
-    
+
     Returns:
         PlainTextResponse: The scraped content converted to Markdown
         
     Raises:
         HTTPException: If URL is invalid or missing
     """
+    MAX_RETRIES = 3
+    MAX_TIMEOUT = 10  # 10 seconds
     url = request.url
     if not url:
         raise HTTPException(status_code=400, detail="No URL provided.")
@@ -129,22 +140,37 @@ async def scrape(request: ScrapeRequest):
         url = f"https://{url}" if url.startswith("www.") else None
     if not url:
         raise HTTPException(status_code=400, detail="Invalid URL.")
-        
-    page = await playwright_manager.global_context.new_page()
-    await page.route("**", block_unnecessary_resources)
-    await page.goto(url, timeout=60000)
-    await page.wait_for_load_state("networkidle")
-    html = await page.content()
-    markdown_content = convert_html_to_markdown(
-        html, 
-        base_url=url,
-        include_images=request.include_images,
-        include_links=request.include_links,
-        include_headers=request.include_headers,
-        include_footers=request.include_footers
-    )
-    await page.close()
-    return PlainTextResponse(content=markdown_content)
+
+    retries = 0
+
+    while retries < MAX_RETRIES:
+        page = await playwright_manager.global_context.new_page()
+        await page.route("**", block_unnecessary_resources)
+        try:
+            await asyncio.wait_for(
+                page.goto(url, timeout=MAX_TIMEOUT * 1000),  # Timeout in milliseconds
+                timeout=MAX_TIMEOUT,
+            )
+            await asyncio.wait_for(
+                page.wait_for_load_state("networkidle", timeout=MAX_TIMEOUT * 1000),
+                timeout=MAX_TIMEOUT,
+            )
+            html = await page.content()
+            markdown_content = convert_html_to_markdown(
+                html,
+                base_url=url,
+                include_images=request.include_images,
+                include_links=request.include_links,
+                include_headers=request.include_headers,
+                include_footers=request.include_footers
+            )
+            return PlainTextResponse(content=markdown_content)
+        except (TimeoutError, asyncio.TimeoutError):
+            retries += 1
+            if retries >= MAX_RETRIES:
+                raise HTTPException(status_code=408, detail=f"Page load timed out after {MAX_RETRIES} retries")
+        finally:
+            await page.close()
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=5000)
