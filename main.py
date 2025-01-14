@@ -166,6 +166,7 @@ async def scrape(request: ScrapeRequest):
             )
             return PlainTextResponse(content=markdown_content)
         except (TimeoutError, asyncio.TimeoutError):
+            print(f"Trying to scrape again because of timeout {url}. Number of retries: {retries}")
             retries += 1
             if retries >= MAX_RETRIES:
                 raise HTTPException(status_code=408, detail=f"Page load timed out after {MAX_RETRIES} retries")

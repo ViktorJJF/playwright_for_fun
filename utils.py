@@ -58,7 +58,6 @@ def convert_html_to_markdown(
     print("El base url: ", base_url)
     """Convert HTML to Markdown with improved formatting."""
     soup = BeautifulSoup(html, "html.parser")
-    print("El soup: ", soup)
     # Decode all obfuscated emails
     soup = decode_all_emails(soup)
 
