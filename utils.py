@@ -5,7 +5,7 @@ from urllib.parse import urljoin, urlparse
 
 def clean_text(text):
     """Clean and normalize text content."""
-    return " ".join(text.strip().split())
+    return " ".join(text.strip().split()) if text else ""
 
 def is_descendant_of_a(tag):
     """Check if the tag is a descendant of an <a> tag."""
@@ -58,6 +58,7 @@ def convert_html_to_markdown(
     print("El base url: ", base_url)
     """Convert HTML to Markdown with improved formatting."""
     soup = BeautifulSoup(html, "html.parser")
+    print("El soup: ", soup)
     # Decode all obfuscated emails
     soup = decode_all_emails(soup)
 
