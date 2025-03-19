@@ -5,7 +5,7 @@ from urllib.parse import urljoin, urlparse
 
 def clean_text(text):
     """Clean and normalize text content."""
-    return " ".join(text.strip().split())
+    return " ".join(text.strip().split()) if text else ""
 
 def is_descendant_of_a(tag):
     """Check if the tag is a descendant of an <a> tag."""
@@ -78,7 +78,7 @@ def convert_html_to_markdown(
         header.append(f'{title}\n{"=" * len(title)}\n')
 
     # Remove unwanted elements
-    for tag in soup(["script", "style", "meta", "link", "noscript", "iframe", "title"]):
+    for tag in soup(["script", "style", "meta", "link", "noscript", "iframe", "title", "br"]):
         tag.decompose()
         
     # Process links

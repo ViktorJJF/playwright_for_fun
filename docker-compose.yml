@@ -4,8 +4,8 @@ services:
   pepe_crawler:
     build: .
     ports:
-      - "8080:80"
+      - "6060:5000"
     environment:
-      - PORT=80
+      - PORT=5000
     volumes:
       - ./src:/app/src
