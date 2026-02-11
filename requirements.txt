@@ -11,3 +11,4 @@ markdownify
 beautifulsoup4
 uvicorn
 fastapi
+curl_cffi

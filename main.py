@@ -6,6 +6,7 @@ import asyncio
 from pydantic import BaseModel
 from urllib.parse import urlparse
 from utils import convert_html_to_markdown
+from curl_cffi import requests as cffi_requests
 import logging
 
 # Configure logging
@@ -75,6 +76,37 @@ async def _wait_for_cloudflare_resolution(page, url: str, max_wait: int = 30) ->
         logging.info(f"Still waiting for Cloudflare ({elapsed}s): title='{title}'")
     logging.warning(f"Cloudflare did NOT resolve for {url} after {max_wait}s")
     return False
+
+
+def _scrape_with_curl_cffi(url: str) -> str | None:
+    """Try to fetch a URL using curl_cffi with Chrome TLS impersonation.
+    Returns HTML string on success, None on failure."""
+    try:
+        resp = cffi_requests.get(
+            url,
+            impersonate="chrome",
+            timeout=20,
+            headers={
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "es-CL,es;q=0.9,en-US;q=0.8,en;q=0.7",
+            },
+            allow_redirects=True,
+        )
+        if resp.status_code == 200:
+            html_lower = resp.text[:3000].lower()
+            if any(marker in html_lower for marker in CF_CHALLENGE_MARKERS):
+                logging.info(f"curl_cffi got Cloudflare challenge page for {url}")
+                return None
+            if len(resp.text) < 500:
+                logging.info(f"curl_cffi got suspiciously short response ({len(resp.text)} chars) for {url}")
+                return None
+            logging.info(f"curl_cffi successfully fetched {url} ({len(resp.text)} chars)")
+            return resp.text
+        logging.info(f"curl_cffi got status {resp.status_code} for {url}")
+        return None
+    except Exception as e:
+        logging.warning(f"curl_cffi failed for {url}: {e}")
+        return None
 
 
 async def block_unnecessary_resources(route):
@@ -233,7 +265,7 @@ async def scrape(request: ScrapeRequest):
             title = await page.title()
             html_snippet = await page.evaluate("() => document.documentElement.innerHTML.substring(0, 3000)")
             if _is_cloudflare_challenge(title, html_snippet):
-                resolved = await _wait_for_cloudflare_resolution(page, url, max_wait=30)
+                resolved = await _wait_for_cloudflare_resolution(page, url, max_wait=15)
                 if resolved:
                     # After Cloudflare resolves, wait for the real page to load
                     try:
@@ -241,8 +273,22 @@ async def scrape(request: ScrapeRequest):
                     except (TimeoutError, asyncio.TimeoutError):
                         pass
                 else:
-                    # Cloudflare didn't resolve — retry
-                    logging.warning(f"Cloudflare challenge not resolved, retry {retries + 1}")
+                    # Playwright stealth failed — try curl_cffi with Chrome TLS impersonation
+                    logging.info(f"Playwright stealth failed for {url}, trying curl_cffi...")
+                    loop = asyncio.get_event_loop()
+                    cffi_html = await loop.run_in_executor(None, _scrape_with_curl_cffi, url)
+                    if cffi_html:
+                        markdown_content = convert_html_to_markdown(
+                            cffi_html,
+                            base_url=url,
+                            include_images=request.include_images,
+                            include_links=request.include_links,
+                            include_headers=request.include_headers,
+                            include_footers=request.include_footers,
+                        )
+                        return PlainTextResponse(content=markdown_content)
+                    # Both failed — retry or give up
+                    logging.warning(f"Both Playwright and curl_cffi failed for {url}, retry {retries + 1}")
                     retries += 1
                     if retries >= MAX_RETRIES:
                         raise HTTPException(
