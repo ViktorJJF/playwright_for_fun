@@ -145,7 +145,8 @@ async def scrape(request: ScrapeRequest):
         HTTPException: If URL is invalid or missing
     """
     MAX_RETRIES = 3
-    MAX_TIMEOUT = 10  # 10 seconds
+    NAVIGATION_TIMEOUT = 30  # seconds — enough for Cloudflare challenges + slow pages
+    NETWORKIDLE_TIMEOUT = 10  # seconds — best-effort, not required
     url = request.url
     if not url:
         raise HTTPException(status_code=400, detail="No URL provided.")
@@ -162,14 +163,20 @@ async def scrape(request: ScrapeRequest):
         page = await playwright_manager.global_context.new_page()
         await page.route("**", block_unnecessary_resources)
         try:
-            await asyncio.wait_for(
-                page.goto(url, timeout=MAX_TIMEOUT * 1000),  # Timeout in milliseconds
-                timeout=MAX_TIMEOUT,
-            )
-            await asyncio.wait_for(
-                page.wait_for_load_state("networkidle", timeout=MAX_TIMEOUT * 1000),
-                timeout=MAX_TIMEOUT,
-            )
+            await page.goto(url, timeout=NAVIGATION_TIMEOUT * 1000, wait_until="domcontentloaded")
+            # Best-effort wait for network idle (SPAs may never reach this)
+            try:
+                await page.wait_for_load_state("networkidle", timeout=NETWORKIDLE_TIMEOUT * 1000)
+            except (TimeoutError, asyncio.TimeoutError):
+                logging.info(f"Network idle timeout for {url} — waiting for SPA content")
+                # For SPAs: wait until body has meaningful content
+                try:
+                    await page.wait_for_function(
+                        "() => document.body.innerText.length > 200",
+                        timeout=5000,
+                    )
+                except (TimeoutError, asyncio.TimeoutError):
+                    logging.info(f"SPA content wait timeout for {url} — proceeding anyway")
             html = await page.content()
             markdown_content = convert_html_to_markdown(
                 html,
