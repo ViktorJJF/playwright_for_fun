@@ -7,6 +7,8 @@ from pydantic import BaseModel
 from urllib.parse import urlparse
 from utils import convert_html_to_markdown
 from curl_cffi import requests as cffi_requests
+import requests as std_requests
+import os
 import logging
 
 # Configure logging
@@ -106,6 +108,34 @@ def _scrape_with_curl_cffi(url: str) -> str | None:
         return None
     except Exception as e:
         logging.warning(f"curl_cffi failed for {url}: {e}")
+        return None
+
+
+FLARESOLVERR_URL = os.environ.get("FLARESOLVERR_URL", "http://flaresolverr:8191/v1")
+
+
+def _scrape_with_flaresolverr(url: str) -> str | None:
+    """Try to fetch a URL using FlareSolverr (Cloudflare bypass service).
+    Returns HTML string on success, None on failure."""
+    try:
+        resp = std_requests.post(
+            FLARESOLVERR_URL,
+            json={"cmd": "request.get", "url": url, "maxTimeout": 60000},
+            timeout=70,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("status") == "ok":
+                solution = data.get("solution", {})
+                html = solution.get("response", "")
+                if len(html) > 500:
+                    logging.info(f"FlareSolverr successfully fetched {url} ({len(html)} chars)")
+                    return html
+                logging.info(f"FlareSolverr got short response ({len(html)} chars) for {url}")
+        logging.info(f"FlareSolverr failed for {url}: status={resp.status_code}")
+        return None
+    except Exception as e:
+        logging.warning(f"FlareSolverr error for {url}: {e}")
         return None
 
 
@@ -287,15 +317,25 @@ async def scrape(request: ScrapeRequest):
                             include_footers=request.include_footers,
                         )
                         return PlainTextResponse(content=markdown_content)
-                    # Both failed — retry or give up
-                    logging.warning(f"Both Playwright and curl_cffi failed for {url}, retry {retries + 1}")
-                    retries += 1
-                    if retries >= MAX_RETRIES:
-                        raise HTTPException(
-                            status_code=403,
-                            detail=f"Cloudflare challenge could not be bypassed for {url}"
+                    # curl_cffi failed — try FlareSolverr as last resort
+                    logging.info(f"curl_cffi failed for {url}, trying FlareSolverr...")
+                    flare_html = await loop.run_in_executor(None, _scrape_with_flaresolverr, url)
+                    if flare_html:
+                        markdown_content = convert_html_to_markdown(
+                            flare_html,
+                            base_url=url,
+                            include_images=request.include_images,
+                            include_links=request.include_links,
+                            include_headers=request.include_headers,
+                            include_footers=request.include_footers,
                         )
-                    continue
+                        return PlainTextResponse(content=markdown_content)
+                    # All methods failed
+                    logging.warning(f"All bypass methods failed for {url}")
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"Cloudflare challenge could not be bypassed for {url}",
+                    )
             else:
                 # Normal page — best-effort wait for network idle
                 try:
