@@ -1,6 +1,6 @@
 from playwright.async_api import async_playwright, TimeoutError
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 import uvicorn
 import asyncio
 from pydantic import BaseModel
@@ -9,6 +9,7 @@ from utils import convert_html_to_markdown
 from curl_cffi import requests as cffi_requests
 import requests as std_requests
 import os
+import hashlib
 import logging
 
 # Configure logging
@@ -209,14 +210,20 @@ class PlaywrightManager:
         await self.global_context.add_init_script(STEALTH_JS)
         return self.global_context
 
-    async def take_screenshot(self, url: str):
-        """Take a screenshot of a page."""
+    async def take_screenshot(self, url: str, full_page: bool = True, width: int = 1920, height: int = 1080) -> bytes:
+        """Take a screenshot of a page and return PNG bytes."""
         if not self.global_context:
             raise RuntimeError("Context not created")
         page = await self.global_context.new_page()
+        await page.set_viewport_size({"width": width, "height": height})
         try:
-            await page.goto(url, timeout=10000)  # 10 seconds timeout
-            await page.screenshot(path=f"{url.replace('https://', '')}.png")
+            await page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            try:
+                await page.wait_for_load_state("networkidle", timeout=10000)
+            except (TimeoutError, asyncio.TimeoutError):
+                logging.info(f"Network idle timeout for screenshot of {url} — proceeding anyway")
+            screenshot_bytes = await page.screenshot(full_page=full_page)
+            return screenshot_bytes
         except TimeoutError:
             raise HTTPException(status_code=408, detail="Page load timed out")
         finally:
@@ -231,8 +238,23 @@ async def startup_event():
     playwright_manager = PlaywrightManager()
     await playwright_manager.start()
 
+SCREENSHOT_DIR = "/app/screenshots"
+os.makedirs(SCREENSHOT_DIR, exist_ok=True)
+
+
+def _url_to_filename(url: str, width: int, height: int, full_page: bool) -> str:
+    """Generate a deterministic filename from URL and viewport params."""
+    key = f"{url}_{width}x{height}_fp{full_page}"
+    url_hash = hashlib.md5(key.encode()).hexdigest()
+    return os.path.join(SCREENSHOT_DIR, f"{url_hash}.png")
+
+
 class ScreenshotPayload(BaseModel):
     url: str
+    full_page: bool = True
+    width: int = 1920
+    height: int = 1080
+    force: bool = False
 
 @app.get("/")
 async def read_root():
@@ -240,9 +262,31 @@ async def read_root():
 
 @app.post("/screenshot")
 async def take_screenshot(payload: ScreenshotPayload):
-    url = payload.url
-    await playwright_manager.take_screenshot(url)
-    return {"message": f"Taking screenshot of {url}"}
+    """Take a screenshot, returning cached version if available.
+
+    Args:
+        payload: url, full_page (default True), width/height (default 1920x1080),
+                 force (default False — set True to regenerate cached screenshot).
+
+    Returns:
+        PNG image bytes.
+    """
+    cache_path = _url_to_filename(payload.url, payload.width, payload.height, payload.full_page)
+
+    if not payload.force and os.path.exists(cache_path):
+        logging.info(f"Returning cached screenshot for {payload.url}")
+        with open(cache_path, "rb") as f:
+            return Response(content=f.read(), media_type="image/png")
+
+    screenshot_bytes = await playwright_manager.take_screenshot(
+        payload.url, payload.full_page, payload.width, payload.height
+    )
+
+    with open(cache_path, "wb") as f:
+        f.write(screenshot_bytes)
+    logging.info(f"Screenshot saved to cache: {cache_path}")
+
+    return Response(content=screenshot_bytes, media_type="image/png")
 
 class ScrapeRequest(BaseModel):
     url: str
