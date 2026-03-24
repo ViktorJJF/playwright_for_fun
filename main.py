@@ -61,22 +61,63 @@ def _is_cloudflare_challenge(title: str, html: str) -> bool:
     return any(marker in combined for marker in CF_CHALLENGE_MARKERS)
 
 
+async def _try_click_turnstile(page) -> bool:
+    """Attempt to find and click a Cloudflare Turnstile checkbox."""
+    try:
+        # Turnstile renders inside an iframe with cf-turnstile in its src
+        for frame in page.frames:
+            if "challenges.cloudflare.com" in (frame.url or ""):
+                # Look for the checkbox input inside the challenge iframe
+                checkbox = await frame.query_selector("input[type='checkbox']")
+                if checkbox:
+                    await checkbox.click()
+                    logging.info("Clicked Turnstile checkbox")
+                    return True
+                # Some Turnstile versions use a clickable body/div
+                body = await frame.query_selector("body")
+                if body:
+                    await body.click()
+                    logging.info("Clicked Turnstile iframe body")
+                    return True
+        # Fallback: try clicking the cf-turnstile widget container on the main page
+        widget = await page.query_selector("[class*='cf-turnstile'] iframe, #turnstile-wrapper iframe")
+        if widget:
+            box = await widget.bounding_box()
+            if box:
+                await page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                logging.info("Clicked Turnstile widget via bounding box")
+                return True
+    except Exception as e:
+        logging.warning(f"Turnstile click attempt failed: {e}")
+    return False
+
+
 async def _wait_for_cloudflare_resolution(page, url: str, max_wait: int = 30) -> bool:
-    """Wait for Cloudflare challenge to resolve. Returns True if resolved."""
+    """Wait for Cloudflare challenge to resolve, actively clicking Turnstile if found."""
     logging.info(f"Cloudflare challenge detected for {url}, waiting up to {max_wait}s...")
     elapsed = 0
     poll_interval = 2
+    clicked = False
     while elapsed < max_wait:
         await asyncio.sleep(poll_interval)
         elapsed += poll_interval
+
+        # Try clicking Turnstile once after initial render (at ~4s)
+        if not clicked and elapsed >= 4:
+            clicked = await _try_click_turnstile(page)
+
         title = await page.title()
         html_snippet = await page.evaluate("() => document.documentElement.innerHTML.substring(0, 3000)")
         if not _is_cloudflare_challenge(title, html_snippet):
             logging.info(f"Cloudflare resolved for {url} after ~{elapsed}s (title: {title})")
-            # Give the real page a moment to render
             await asyncio.sleep(2)
             return True
         logging.info(f"Still waiting for Cloudflare ({elapsed}s): title='{title}'")
+
+        # Retry click if first attempt was too early
+        if clicked and elapsed == 10:
+            await _try_click_turnstile(page)
+
     logging.warning(f"Cloudflare did NOT resolve for {url} after {max_wait}s")
     return False
 
@@ -210,12 +251,13 @@ class PlaywrightManager:
         await self.global_context.add_init_script(STEALTH_JS)
         return self.global_context
 
-    async def take_screenshot(self, url: str, full_page: bool = True, width: int = 1920, height: int = 1080) -> bytes:
-        """Take a screenshot of a page and return PNG bytes."""
+    async def take_screenshot(self, url: str, full_page: bool = True, width: int = 1920, height: int = 1080) -> tuple[bytes, bool]:
+        """Take a screenshot of a page and return (PNG bytes, was_blocked)."""
         if not self.global_context:
             raise RuntimeError("Context not created")
         page = await self.global_context.new_page()
         await page.set_viewport_size({"width": width, "height": height})
+        was_blocked = False
         try:
             await page.goto(url, timeout=30000, wait_until="domcontentloaded")
 
@@ -223,14 +265,14 @@ class PlaywrightManager:
             title = await page.title()
             html_snippet = await page.evaluate("() => document.documentElement.innerHTML.substring(0, 3000)")
             if _is_cloudflare_challenge(title, html_snippet):
-                resolved = await _wait_for_cloudflare_resolution(page, url, max_wait=20)
+                resolved = await _wait_for_cloudflare_resolution(page, url, max_wait=25)
                 if resolved:
                     try:
                         await page.wait_for_load_state("networkidle", timeout=10000)
                     except (TimeoutError, asyncio.TimeoutError):
                         pass
                 else:
-                    logging.warning(f"Cloudflare challenge not resolved for screenshot of {url}")
+                    was_blocked = True
             else:
                 try:
                     await page.wait_for_load_state("networkidle", timeout=10000)
@@ -238,7 +280,7 @@ class PlaywrightManager:
                     logging.info(f"Network idle timeout for screenshot of {url} — proceeding anyway")
 
             screenshot_bytes = await page.screenshot(full_page=full_page)
-            return screenshot_bytes
+            return screenshot_bytes, was_blocked
         except TimeoutError:
             raise HTTPException(status_code=408, detail="Page load timed out")
         finally:
@@ -293,13 +335,17 @@ async def take_screenshot(payload: ScreenshotPayload):
         with open(cache_path, "rb") as f:
             return Response(content=f.read(), media_type="image/png")
 
-    screenshot_bytes = await playwright_manager.take_screenshot(
+    screenshot_bytes, was_blocked = await playwright_manager.take_screenshot(
         payload.url, payload.full_page, payload.width, payload.height
     )
 
-    with open(cache_path, "wb") as f:
-        f.write(screenshot_bytes)
-    logging.info(f"Screenshot saved to cache: {cache_path}")
+    # Don't cache Cloudflare challenge pages
+    if not was_blocked:
+        with open(cache_path, "wb") as f:
+            f.write(screenshot_bytes)
+        logging.info(f"Screenshot saved to cache: {cache_path}")
+    else:
+        logging.warning(f"Screenshot of {payload.url} was a Cloudflare challenge — not cached")
 
     return Response(content=screenshot_bytes, media_type="image/png")
 
