@@ -218,10 +218,25 @@ class PlaywrightManager:
         await page.set_viewport_size({"width": width, "height": height})
         try:
             await page.goto(url, timeout=30000, wait_until="domcontentloaded")
-            try:
-                await page.wait_for_load_state("networkidle", timeout=10000)
-            except (TimeoutError, asyncio.TimeoutError):
-                logging.info(f"Network idle timeout for screenshot of {url} — proceeding anyway")
+
+            # Check for Cloudflare challenge and wait for resolution
+            title = await page.title()
+            html_snippet = await page.evaluate("() => document.documentElement.innerHTML.substring(0, 3000)")
+            if _is_cloudflare_challenge(title, html_snippet):
+                resolved = await _wait_for_cloudflare_resolution(page, url, max_wait=20)
+                if resolved:
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=10000)
+                    except (TimeoutError, asyncio.TimeoutError):
+                        pass
+                else:
+                    logging.warning(f"Cloudflare challenge not resolved for screenshot of {url}")
+            else:
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=10000)
+                except (TimeoutError, asyncio.TimeoutError):
+                    logging.info(f"Network idle timeout for screenshot of {url} — proceeding anyway")
+
             screenshot_bytes = await page.screenshot(full_page=full_page)
             return screenshot_bytes
         except TimeoutError:
