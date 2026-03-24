@@ -9,6 +9,7 @@ from utils import convert_html_to_markdown
 from curl_cffi import requests as cffi_requests
 import requests as std_requests
 import os
+import time
 import hashlib
 import logging
 
@@ -296,7 +297,16 @@ async def startup_event():
     await playwright_manager.start()
 
 SCREENSHOT_DIR = "/app/screenshots"
+CACHE_TTL_SECONDS = 7 * 24 * 60 * 60  # 7 days
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
+
+
+def _is_cache_valid(path: str) -> bool:
+    """Check if a cached file exists and is younger than CACHE_TTL_SECONDS."""
+    if not os.path.exists(path):
+        return False
+    age = time.time() - os.path.getmtime(path)
+    return age < CACHE_TTL_SECONDS
 
 
 def _url_to_filename(url: str, width: int, height: int, full_page: bool) -> str:
@@ -330,7 +340,7 @@ async def take_screenshot(payload: ScreenshotPayload):
     """
     cache_path = _url_to_filename(payload.url, payload.width, payload.height, payload.full_page)
 
-    if not payload.force and os.path.exists(cache_path):
+    if not payload.force and _is_cache_valid(cache_path):
         logging.info(f"Returning cached screenshot for {payload.url}")
         with open(cache_path, "rb") as f:
             return Response(content=f.read(), media_type="image/png")
