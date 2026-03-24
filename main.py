@@ -1,4 +1,4 @@
-from playwright.async_api import async_playwright, TimeoutError
+from patchright.async_api import async_playwright, TimeoutError
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import PlainTextResponse, Response
 import uvicorn

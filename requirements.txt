@@ -6,6 +6,7 @@ pytest-flask
 
 # App
 playwright
+patchright
 gunicorn
 markdownify
 beautifulsoup4

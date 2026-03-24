@@ -6,11 +6,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget curl gnupg libnss3 libatk-bridge2.0-0 libxcomposite1 libxrandr2 libgbm1 libgtk-3-0 libxdamage1 libasound2 libxtst6 libx11-xcb1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python and Playwright
-RUN pip install --no-cache-dir playwright
+# Install Patchright (stealth Playwright fork) and Playwright
+RUN pip install --no-cache-dir patchright playwright
 
-# Install Playwright browsers
-RUN playwright install
+# Install Patchright browsers (patched Chromium)
+RUN patchright install
 
 # Set the working directory
 WORKDIR /app
